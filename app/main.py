@@ -1,6 +1,7 @@
 """CoWork API application entrypoint."""
 from fastapi import FastAPI
 
+from . import models 
 from .database import Base, engine
 from .errors import AppError, app_error_handler
 from .routers import admin, auth, bookings, health, rooms
