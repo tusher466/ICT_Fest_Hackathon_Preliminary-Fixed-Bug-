@@ -1,5 +1,5 @@
 """SQLAlchemy ORM models for the CoWork domain."""
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -12,6 +12,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from .database import Base
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 class Organization(Base):
@@ -30,7 +33,8 @@ class User(Base):
     username = Column(String, nullable=False, index=True)
     hashed_password = Column(String, nullable=False)
     role = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class Room(Base):
@@ -49,12 +53,15 @@ class Booking(Base):
     id = Column(Integer, primary_key=True)
     room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    start_time = Column(DateTime, nullable=False, index=True)
-    end_time = Column(DateTime, nullable=False)
+    
+    start_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_time = Column(DateTime(timezone=True), nullable=False)
     status = Column(String, nullable=False, default="confirmed")
-    reference_code = Column(String, nullable=False, index=True)
+
+    reference_code = Column(String, unique=True, nullable=False, index=True)
+    
     price_cents = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     refunds = relationship("RefundLog", backref="booking")
 
@@ -66,4 +73,5 @@ class RefundLog(Base):
     booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
     amount_cents = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
-    processed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    processed_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
