@@ -1,7 +1,5 @@
-"""Administrative reporting and export endpoints."""
 from datetime import datetime, time, timedelta
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -30,30 +28,54 @@ def usage_report(
         from_date = datetime.strptime(frm, "%Y-%m-%d").date()
         to_date = datetime.strptime(to, "%Y-%m-%d").date()
     except ValueError:
-        raise AppError(400, "INVALID_BOOKING_WINDOW", "Invalid date range")
+        raise AppError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="INVALID_BOOKING_WINDOW",
+            message="Invalid date range format. Use YYYY-MM-DD",
+        )
+
+    if from_date > to_date:
+        raise AppError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="INVALID_DATE_RANGE",
+            message="'from' date cannot be after 'to' date",
+        )
 
     range_start = datetime.combine(from_date, time.min)
     range_end = datetime.combine(to_date + timedelta(days=1), time.min)
 
-    rooms = db.query(Room).filter(Room.org_id == admin.org_id).order_by(Room.id.asc()).all()
+    rooms = (
+        db.query(Room)
+        .filter(Room.org_id == admin.org_id)
+        .order_by(Room.id.asc())
+        .all()
+    )
+    room_ids = [room.id for room in rooms]
+
+    bookings = (
+        db.query(Booking)
+        .filter(
+            Booking.room_id.in_(room_ids),
+            Booking.status == "confirmed",
+            Booking.start_time >= range_start,
+            Booking.start_time < range_end,
+        )
+        .all()
+    )
+
+    bookings_by_room = {}
+    for booking in bookings:
+        bookings_by_room.setdefault(booking.room_id, []).append(booking)
+
     room_rows = []
     for room in rooms:
-        bookings = (
-            db.query(Booking)
-            .filter(
-                Booking.room_id == room.id,
-                Booking.status == "confirmed",
-                Booking.start_time >= range_start,
-                Booking.start_time < range_end,
-            )
-            .all()
-        )
+        room_bookings = bookings_by_room.get(room.id, [])
         room_rows.append(
             {
                 "room_id": room.id,
                 "room_name": room.name,
-                "confirmed_bookings": len(bookings),
-                "revenue_cents": sum(b.price_cents for b in bookings),
+                "confirmed_bookings": len(room_bookings),
+                "revenue_cents": sum(b.price_cents for b in room_bookings),
             }
         )
 
@@ -69,5 +91,25 @@ def export(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    if room_id is not None:
+        room = (
+            db.query(Room)
+            .filter(Room.id == room_id, Room.org_id == admin.org_id)
+            .first()
+        )
+        if room is None:
+            raise AppError(
+                status_code=status.HTTP_404_NOT_FOUND,
+                error_code="ROOM_NOT_FOUND",
+                message="Room not found or access denied",
+            )
+
     csv_body = generate_export(db, admin.org_id, admin.id, room_id, include_all)
-    return Response(content=csv_body, media_type="text/csv")
+
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+        },
+    )
