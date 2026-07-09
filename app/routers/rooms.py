@@ -1,7 +1,5 @@
-"""Room management, availability and live statistics."""
 from datetime import datetime, time, timedelta
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from .. import cache
@@ -29,7 +27,11 @@ def _serialize_room(room: Room) -> dict:
 def _get_org_room(db: Session, room_id: int, org_id: int) -> Room:
     room = db.query(Room).filter(Room.id == room_id, Room.org_id == org_id).first()
     if room is None:
-        raise AppError(404, "ROOM_NOT_FOUND", "Room not found")
+        raise AppError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="ROOM_NOT_FOUND",
+            message="Room not found",
+        )
     return room
 
 
@@ -39,7 +41,7 @@ def list_rooms(db: Session = Depends(get_db), user: User = Depends(get_current_u
     return [_serialize_room(r) for r in rooms]
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=status.HTTP_201_CREATED)
 def create_room(
     payload: RoomCreateRequest,
     db: Session = Depends(get_db),
@@ -73,17 +75,24 @@ def availability(
     try:
         day = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
-        raise AppError(400, "INVALID_BOOKING_WINDOW", "Invalid date")
+        raise AppError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="INVALID_BOOKING_WINDOW",
+            message="Invalid date format. Use YYYY-MM-DD",
+        )
 
     day_start = datetime.combine(day, time.min)
     day_end = day_start + timedelta(days=1)
+    
+    # BUG FIXED: Query criteria was missing overlapping bookings that started before day_start 
+    # but extended into the requested date window.
     bookings = (
         db.query(Booking)
         .filter(
             Booking.room_id == room.id,
             Booking.status == "confirmed",
-            Booking.start_time >= day_start,
             Booking.start_time < day_end,
+            Booking.end_time > day_start,
         )
         .order_by(Booking.start_time.asc(), Booking.id.asc())
         .all()
@@ -104,12 +113,4 @@ def availability(
 def room_stats(
     room_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    room = _get_org_room(db, room_id, user.org_id)
-    current = stats.get(room.id)
-    return {
-        "room_id": room.id,
-        "total_confirmed_bookings": current["count"],
-        "total_revenue_cents": current["revenue"],
-    }
+    user: User = Depends(get)
